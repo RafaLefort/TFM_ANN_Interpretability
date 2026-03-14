@@ -1,6 +1,0 @@
-git status --> shows on red files not uploaded, and on green the comitted ones
-git add "BSL, DELAY & SENS subject model.R" --> adds the file to gitHub
-git commit -m "feat: first model created" --> commits the file to be uploaded
-git branch --> shows the were we are uploading
-git push --set-upstream origin master --> uploads the files
-git pull --> downloads the new files
