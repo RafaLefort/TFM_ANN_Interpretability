@@ -1,4 +1,4 @@
-\# 📘 TFM — Working Memory \& ANN Interpretability
+# 📘 TFM — Working Memory \& ANN Interpretability
 
 
 
