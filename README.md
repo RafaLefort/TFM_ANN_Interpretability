@@ -93,19 +93,33 @@ This folder will contain:
 
 ## 🛠️ Requirements
 
-This project uses **R**.  
-Recommended packages include:
+This project uses **R** and **Python**.  
+Recommended **R** packages include:
 
 - `tidyverse`
 - `ggplot2`
 - `dplyr`
 - `glmnet`
 - `caret`
-- `keras` (for NN models)
-- `data.table`
+- `arrow`
 
 Install missing packages with:
 
 ```r
-install.packages(c("tidyverse", "ggplot2", "dplyr", "glmnet", "caret", "data.table"))
+install.packages(c("tidyverse", "ggplot2", "dplyr", "glmnet", "caret", "arrow")
 
+
+Recommended **Python** packages include:
+
+- `pickle`
+- `torch`
+- `pandas`
+- `numpy`
+- `sklearn`
+- `seaborn`
+- `matplotlib`
+
+Install missing packages with:
+
+```r
+pip install "<package_name>"
