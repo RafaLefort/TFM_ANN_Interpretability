@@ -34,12 +34,12 @@ Each component corresponds to a different stage of the analysis pipeline.
 
 The dataset used in this project comes from the study:
 
-**Pani, P., et al. (2023).**  
-*Working memory representations in human cortex during delay periods.*  
-Cortex.  
+**Turoman, N., et al. (2023).**  
+*Decoding the content of working memory in school-aged children.*  
+Cortex. Volume 171, February 2024, Pages 136-152
 https://doi.org/10.1016/j.cortex.2023.10.019
 
-The data were collected using intracranial EEG (iEEG) recordings during a working‑memory task involving Baseline, Sensory, and Delay periods.  
+The data were collected using EEG (EEG) recordings during a working‑memory task involving Baseline, Sensory, and Delay periods.  
 All analyses in this repository are based on the dataset provided in that publication.
 
 ---
@@ -71,11 +71,14 @@ This section includes models used to quantify the relationship between neural ac
 
 This folder will contain:
 
-- ANN architectures  
+- CNN architectures  
 - Training scripts  
 - Interpretability analyses (e.g., saliency maps, feature importance)  
 
-Currently empty — models will be added as the project progresses.
+**Files:**  
+- `RData_to_paq.R` — Conversion of the RData dataset to paq format for importing it to python.
+- `CNN.py` — CNN implementation for subject-level analysis.
+- `CNN_results.py` — Plotting of the CNN results.
 
 ---
 
