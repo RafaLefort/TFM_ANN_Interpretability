@@ -23,6 +23,7 @@ Each component corresponds to a different stage of the analysis pipeline.
 │   └── RData_to_paq.R  
 │   └── CNN.py  
 │   └── CNN_results.py  
+│   └── Converge_CNN.py
 │  
 ├── .gitignore  
 └── README.md  
@@ -79,6 +80,7 @@ This folder will contain:
 - `RData_to_paq.R` — Conversion of the RData dataset to paq format for importing it to python.
 - `CNN.py` — CNN implementation for subject-level analysis.
 - `CNN_results.py` — Plotting of the CNN results.
+- `Convergence_CNN.py` — Plotting of the CNN results.
 
 ---
 
