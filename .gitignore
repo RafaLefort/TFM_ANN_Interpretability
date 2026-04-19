@@ -2,9 +2,12 @@
 .Rhistory
 *.rdata
 *.txt
+*.parquet
 *.csv
 __pycache__
 Plots/
 .venv
 .vscode
 torch-env/
+NN/results
+CNN 2.py
