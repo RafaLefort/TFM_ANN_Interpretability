@@ -4,7 +4,7 @@
 setwd("C:\\Users\\lefor\\Desktop\\OneDriveBackupFiles\\Documentos\\Q4 MUEI\\TFM\\GitHub")
 
 # Loading the needed libraries
-library(ggplot2)
+library(tidyverse)
 
 # ----- 1. LOADING DATA -----
 
@@ -20,8 +20,7 @@ assign_categories <- function(df){
       y == 1 ~ "visual",
       y == 3 ~ "spatial",
       y == 5 ~ "verbal",
-      TRUE ~ NA_character_
-    )) %>%
+      TRUE ~ NA_character_)) %>%
     ungroup()
 }
 
@@ -113,7 +112,7 @@ BSL %>%
   mutate(percent = n / sum(n) * 100) %>% 
   ggplot(aes(x = category, y = percent, fill = category)) +
   
-  geom_col() +
+  geom_col(width = 0.7) +
   
   scale_fill_manual(values = c(
     "visual"  = "#4f81bd",

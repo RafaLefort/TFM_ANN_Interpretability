@@ -1,7 +1,7 @@
 # 20 models for every period, one for subject. Fist iteration
 # Finished on the 06/03/2026 
 
-setwd("C:\\Users\\lefor\\Desktop\\OneDriveBackupFiles\\Documentos\\Q4 MUEI\\TFM\\Base Dataset")
+setwd("C:\\Users\\lefor\\Desktop\\OneDriveBackupFiles\\Documentos\\Q4 MUEI\\TFM\\GitHub")
 
 # Loading the needed libraries
 library(dplyr)
