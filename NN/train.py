@@ -11,7 +11,7 @@ Configure the EXPERIMENT block below, then run:
 
 Configuration
 -------------
-MODEL       : 'eegnet' or 'lightweightEEGNet'
+MODEL       : 'EEGNet' or 'lightweightEEGNet'
 AUGMENT     : True  → frequency mixup on training set (lightweightEEGNet only)
                False → no augmentation
 PERIODS     : list of periods to run, any subset of
@@ -37,8 +37,8 @@ from utils import (
 # EXPERIMENT — edit this block to configure your run
 # =========================================================
 
-MODEL   = "eegnet"               # 'eegnet' | 'lightweightEEGNet'
-AUGMENT = False                # True | False  (lightweightEEGNet only; ignored for EEGNet)
+MODEL   = "EEGNet"               # 'EEGNet' | 'lightweightEEGNet'
+AUGMENT = False                  # True | False
 PERIODS = ["BSL", "SENS", "DELAY"]
 
 
@@ -55,7 +55,7 @@ PERIOD_FOLDERS = {
 }
 
 # Results directory is named automatically from the experiment config
-_aug_tag    = "_with_data_augmentation" if AUGMENT else "_without_data_augmentation"
+_aug_tag    = "_data_augmentation" if AUGMENT else ""
 _model_tag  = "lightweightEEGNet" if MODEL == "lightweightEEGNet" else "EEGNet"
 RESULTS_DIR = os.path.join(
     BASE_PATH,
@@ -92,7 +92,7 @@ print(f"Results: {RESULTS_DIR}\n")
 # MODEL AND TRAINING CONFIG
 # =========================================================
 
-if MODEL == "eegnet":
+if MODEL == "EEGNet":
 
     MODEL_CLASS  = EEGNet
     MODEL_KWARGS = {
@@ -132,7 +132,7 @@ elif MODEL == "lightweightEEGNet":
     }
 
 else:
-    raise ValueError(f"Unknown model '{MODEL}'. Choose 'eegnet' or 'lightweightEEGNet'.")
+    raise ValueError(f"Unknown model '{MODEL}'. Choose 'EEGNet' or 'lightweightEEGNet'.")
 
 
 # =========================================================
