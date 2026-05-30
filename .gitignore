@@ -11,5 +11,5 @@ Plots/
 .vscode
 
 torch-env/
-NN/results
+NN/results/results_*
 CNN 2.py
