@@ -1,0 +1,58 @@
+name: tfm-ann-interpretability
+# ---------------------------------------------------------------
+# Entorno reproducible para:
+# TFM — ANN Interpretability for Working Memory Classification
+# Autor: RafaLefort
+# Versiones verificadas: mayo 2026
+# ---------------------------------------------------------------
+# Crear entorno:   conda env create -f environment.yml
+# Activar:         conda activate tfm-ann-interpretability
+# Actualizar:      conda env update -f environment.yml --prune
+# Exportar estado: conda env export --no-builds > environment.yml
+# ---------------------------------------------------------------
+
+channels:
+  - pytorch
+  - conda-forge
+  - defaults
+
+dependencies:
+  # --- Python ---------------------------------------------------
+  - python=3.11
+
+  # --- Cómputo numérico ----------------------------------------
+  - numpy=2.4.6
+  - scipy=1.15.3
+
+  # --- Datos ----------------------------------------------------
+  - pandas=3.0.3
+  - pyarrow=20.0.0       # lectura de archivos .parquet desde R
+
+  # --- Machine Learning ----------------------------------------
+  - scikit-learn=1.8.0
+
+  # --- Deep Learning (CPU) -------------------------------------
+  # Para GPU con CUDA 12.x, reemplaza por:
+  #   pytorch::pytorch=2.12.0 + pytorch::pytorch-cuda=12.4
+  - pytorch::pytorch=2.12.0
+  - pytorch::torchvision=0.22.0
+  - pytorch::cpuonly          # eliminar esta línea si usas GPU
+
+  # --- Visualización -------------------------------------------
+  - matplotlib=3.10.3
+  - seaborn=0.13.2
+
+  # --- Jupyter (notebooks opcionales) -------------------------
+  - jupyter=1.1.1
+  - ipykernel=6.29.5
+
+  # --- Utilidades ----------------------------------------------
+  - tqdm=4.67.1            # barras de progreso
+  - pyyaml=6.0.2           # lectura de configs .yaml
+
+  # --- Paquetes solo disponibles vía pip ----------------------
+  - pip
+  - pip:
+    - shap==0.47.2          # SHapley Additive exPlanations
+    - captum==0.8.0         # interpretabilidad nativa para PyTorch
+    - lime==0.2.0.1         # Local Interpretable Model-agnostic Explanations
