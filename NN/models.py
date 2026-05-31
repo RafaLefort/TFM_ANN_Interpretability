@@ -5,10 +5,10 @@ Architecture definitions for EEG working memory classification.
 
 Classes
 -------
-EEGNet  : EEGNet architecture (Lawhern et al., 2018), adapted for
-          multiclass classification with AdaptiveAvgPool2d classifier.
-CNN     : Lightweight depthwise-separable CNN architecture, inspired
-          by EEGNet but with a smaller parameter count.
+EEGNet              : EEGNet architecture (Lawhern et al., 2018), adapted for
+                    multiclass classification with AdaptiveAvgPool2d classifier.
+lightweightEEGNet   : Lightweight depthwise-separable CNN architecture, inspired
+                    by EEGNet but with a smaller parameter count.
 """
 
 import torch
@@ -277,7 +277,7 @@ class lightweightEEGNet(nn.Module):
 
     def forward(self, x):
 
-        x = x.unsqueeze(1)   # (B, C, T) → (B, 1, C, T)
+        x = x.unsqueeze(1)
 
         x = self.temporal_conv(x)
         x = self.spatial_conv(x)

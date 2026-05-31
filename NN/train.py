@@ -37,9 +37,9 @@ from utils import (
 # EXPERIMENT — edit this block to configure your run
 # =========================================================
 
-MODEL   = "EEGNet"               # 'EEGNet' | 'lightweightEEGNet'
-AUGMENT = False                  # True | False
-PERIODS = ["BSL", "SENS", "DELAY"]
+MODEL   = "lightweightEEGNet"               # 'EEGNet' | 'lightweightEEGNet'
+AUGMENT = True                              # True | False
+PERIODS = ["BSL"]                           # any subset of ['BSL', 'SENS', 'DELAY']
 
 
 # =========================================================
@@ -92,24 +92,13 @@ print(f"Results: {RESULTS_DIR}\n")
 # MODEL AND TRAINING CONFIG
 # =========================================================
 
-if MODEL == "EEGNet":
+if MODEL == "EEGNet": # Arreglar este bloque para que usen la misma configuración de entrenamiento
 
     MODEL_CLASS  = EEGNet
     MODEL_KWARGS = {
         "n_channels":   64,
         "n_classes":    3,
         "dropout_rate": 0.5,
-    }
-    TRAIN_CFG = {
-        "epochs":           100,
-        "patience":         20,
-        "lr":               1e-3,
-        "weight_decay":     5e-4,
-        "optimizer":        "adamw",
-        "scheduler":        "cosine",
-        "label_smoothing":  0.0,
-        "batch_size":       16,
-        "online_augment":   False,  # augmentation handled by EEGDataset
     }
 
 elif MODEL == "lightweightEEGNet":
@@ -119,21 +108,20 @@ elif MODEL == "lightweightEEGNet":
         "n_channels": 64,
         "n_classes":  3,
     }
-    TRAIN_CFG = {
-        "epochs":           100,
-        "patience":         20,
-        "lr":               1e-3,
-        "weight_decay":     1e-5,
-        "optimizer":        "adamw",
-        "scheduler":        "cosine",
-        "label_smoothing":  0.0,
-        "batch_size":       32,
-        "online_augment":   False,  # augmentation handled by EEGDataset
-    }
 
 else:
     raise ValueError(f"Unknown model '{MODEL}'. Choose 'EEGNet' or 'lightweightEEGNet'.")
 
+TRAIN_CFG = {
+    "epochs":           100,
+    "patience":         20,
+    "lr":               1e-3,
+    "weight_decay":     1e-5,
+    "optimizer":        "adamw",
+    "scheduler":        "cosine",
+    "label_smoothing":  0.0,
+    "batch_size":       32,
+}
 
 # =========================================================
 # RUN EXPERIMENTS

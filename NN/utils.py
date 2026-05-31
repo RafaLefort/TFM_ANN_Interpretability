@@ -180,7 +180,7 @@ def augment_eeg(x):
 
 
 # =========================================================
-# EEGDATASET — for CNN lightweight model
+# EEGDATASET
 # =========================================================
 
 class EEGDataset(Dataset):
@@ -274,7 +274,7 @@ def train_model(
     Training loop with early stopping and best-model restoration.
 
     Optimizer, scheduler, loss and hyperparameters are taken from cfg
-    so that EEGNet and CNN can use different training configurations
+    so that EEGNet and lightweightEEGNet can use different training configurations
     without modifying this function.
 
     Parameters
@@ -345,9 +345,7 @@ def train_model(
             y2  = y2.to(device)
             lam = lam.to(device)
 
-            # EEGNet uses online augmentation on the batch
-            if cfg.get("online_augment", False):
-                xb = augment_eeg(xb)
+            xb = augment_eeg(xb)
 
             optimizer.zero_grad()
 
@@ -470,7 +468,7 @@ def run_cv(
     ----------
     X            : np.ndarray, shape (n_trials, n_channels, n_samples)
     y            : np.ndarray, shape (n_trials,), integer labels
-    model_class  : class — EEGNet or CNN (from models.py)
+    model_class  : class — EEGNet or lightweightEEGNet (from models.py)
     model_kwargs : dict  — passed to model_class(...) at each fold
     train_cfg    : dict  — passed to train_model(...)
     device       : torch.device
@@ -524,31 +522,13 @@ def run_cv(
 
         # -------------------------------------------------
         # DATASETS AND DATALOADERS
-        # EEGNet uses TensorDataset (augmentation is online).
-        # CNN uses EEGDataset (augmentation is in __getitem__).
+        # Aumentation is in EEGDataset (augmentation is in __getitem__).
         # Both produce (x, y1, y2, lam) batches for compatibility
         # with the shared train_model loss computation.
         # -------------------------------------------------
 
-        if train_cfg.get("online_augment", False):
-
-            # EEGNet path: TensorDataset, augmentation inside train_model
-            train_ds = TensorDataset(
-                torch.tensor(X_train, dtype=torch.float32),
-                torch.tensor(y_train, dtype=torch.long),
-                torch.tensor(y_train, dtype=torch.long),
-                torch.ones(len(y_train), dtype=torch.float32))
-
-            val_ds = TensorDataset(
-                torch.tensor(X_val,   dtype=torch.float32),
-                torch.tensor(y_val,   dtype=torch.long),
-                torch.tensor(y_val,   dtype=torch.long),
-                torch.ones(len(y_val), dtype=torch.float32))
-
-        else:
-
-            train_ds = EEGDataset(X_train, y_train, augment=augment)
-            val_ds   = EEGDataset(X_val,   y_val,   augment=False)
+        train_ds = EEGDataset(X_train, y_train, augment=augment)
+        val_ds   = EEGDataset(X_val,   y_val,   augment=False)
 
 
         train_loader = DataLoader(
@@ -566,7 +546,7 @@ def run_cv(
         # MODEL INSTANTIATION
         # n_samples is passed from the actual data shape so
         # the dummy forward pass in CNN.__init__ uses the real
-        # temporal length (fixes the hardcoded-250 bug in EEGNet).
+        # temporal length.
         # -------------------------------------------------
 
         model = model_class(
@@ -581,21 +561,6 @@ def run_cv(
             val_loader,
             train_cfg,
             device)
-
-
-        # -------------------------------------------------
-        # AUGMENTATION STATISTICS (CNN only)
-        # -------------------------------------------------
-
-        if not train_cfg.get("online_augment", False):
-
-            total = train_ds.total_samples
-            mixed = train_ds.mixup_count
-            ratio = mixed / max(total, 1)
-
-            print(f"  Augmentation — total: {total}, "
-                  f"mixup: {mixed}, ratio: {ratio:.2f}")
-
 
         acc = accuracy_score(labels, preds)
         cm  = confusion_matrix(labels, preds)
