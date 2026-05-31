@@ -4,16 +4,29 @@ import matplotlib.pyplot as plt
 import os
 
 # =========================
-# LOAD RESULTS (JSON)
+# LOAD RESULTS
 # =========================
 
-with open("NN/results_lightweightEEGNet_without_data_augmentation/results_bsl.json", "r") as f:
+BASE_PATH = "NN/results/"
+
+MODEL = "lightweightEEGNet"              # 'EEGNet' | 'lightweightEEGNet'
+AUGMENT = True                           # True | False
+
+# Results directory is named automatically from the experiment config
+_aug_tag    = "_data_augmentation" if AUGMENT else ""
+_model_tag  = "lightweightEEGNet" if MODEL == "lightweightEEGNet" else "EEGNet"
+
+RESULTS_DIR = os.path.join(
+    BASE_PATH,
+    f"{_model_tag}{_aug_tag }/")
+
+with open(os.path.join(RESULTS_DIR, "results_bsl.json"), "r") as f:
     results_bsl = json.load(f)
 
-with open("NN/results_lightweightEEGNet_without_data_augmentation/results_sens.json", "r") as f:
+with open(os.path.join(RESULTS_DIR, "results_sens.json"), "r") as f:
     results_sens = json.load(f)
 
-with open("NN/results_lightweightEEGNet_without_data_augmentation/results_delay.json", "r") as f:
+with open(os.path.join(RESULTS_DIR, "results_delay.json"), "r") as f:
     results_delay = json.load(f)
 
 
@@ -46,7 +59,7 @@ def average_losses(train_losses, val_losses):
 
 def plot_period(results, name):
 
-    save_dir = "NN/results_lightweightEEGNet_without_data_augmentation/plots"
+    save_dir = os.path.join(RESULTS_DIR)
     os.makedirs(save_dir, exist_ok=True)
 
     subjects = sorted(results.keys())

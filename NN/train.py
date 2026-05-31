@@ -59,7 +59,7 @@ _aug_tag    = "_data_augmentation" if AUGMENT else ""
 _model_tag  = "lightweightEEGNet" if MODEL == "lightweightEEGNet" else "EEGNet"
 RESULTS_DIR = os.path.join(
     BASE_PATH,
-    f"results_{_model_tag}{_aug_tag }")
+    f"{_model_tag}{_aug_tag }")
 
 
 # =========================================================

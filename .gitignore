@@ -9,7 +9,9 @@ __pycache__
 Plots/
 .venv
 .vscode
+renv
+.Rprofile
 
 torch-env/
-NN/results/results_*
-CNN 2.py
+NN/results/*EEGNet*
+NN/Previous Iterations/
