@@ -28,25 +28,28 @@ TFM_ANN_Interpretability/
 ├── README.md
 ├── LICENSE
 ├── .gitignore
-├── environment.yml              ← Python reproducible environment
-├── renv.lock                    ← R reproducible environment
+├── environment.yml                                         ← Python reproducible environment
+├── renv.lock                                               ← R reproducible environment
 │
 ├── data/
-│   └── README.md                ← Dataset download instructions
+│   └── README.md                                           ← Dataset download instructions
 │
-├── Exploratory Analysis/
-│   └── Exploratory analysis.R   ← First-pass EEG data exploration
+├── Exploratory_Analysis/
+│   └── exploratory_analysis.R                              ← First-pass EEG data exploration
 │
 ├── GLM/
-│   └── BSL, DELAY & SENS subject model.R  ← Subject-level GLM
+│   └── GLM_model,_training_and_results.R                   ← Subject-level GLM
 │
 ├── Data Transformation/
-│   └── RData_to_paq.R           ← Converts R data to .parquet for Python
+│   └── RData_to_csv.R                                      ← Converts R data to .csv for Python
 │
 └── NN/
-    ├── CNN.py                   ← CNN architecture and training
-    ├── CNN_results.py           ← Results visualisation
-    └── Converge_CNN.py          ← Convergence diagnostics
+    ├── models.py                                           ← CNN models
+    ├── train.py                                            ← Training the selected CNN
+    ├── utils.py                                            ← Functions for the training
+    └── results/
+        ├── plot_accuracy_results_by_period.py              ← Plot accuracy results
+        └── plot_convergence_by_subject_and_period.py       ← Plot convergence for each subject
 ```
 
 ---
