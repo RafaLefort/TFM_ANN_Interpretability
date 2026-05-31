@@ -129,7 +129,7 @@ Converts the R dataset to `.csv` format so it can be read by the Python pipeline
 python NN/train.py
 ```
 
-Trains the Convolutional Neural Network on the EEG data for working memory content classification. You can choose between two networks (EEGNet or lightweight_EEGNET) and including data augmentation (True or False).
+Trains the Convolutional Neural Network on the EEG data for working memory content classification. You can choose between two networks (EEGNet or lightweightEEGNET) and including data augmentation (True or False).
 
 ### Step 5 — Results and diagnostics (Python)
 
@@ -148,7 +148,7 @@ Generates result plots and convergence diagnostics for the trained model.
 Subject-level GLMs quantify the relationship between neural activity (EEG channels × time) and experimental condition. Results serve as an interpretable reference for comparison with the CNN.
 
 ### Deep learning
-A CNN trained on the EEG data classifies working memory content across conditions. The architecture is described in [`NN/CNN.py`](NN/CNN.py).
+A CNN trained on the EEG data classifies working memory content across conditions. The architecture is described in [`NN/models.py`](NN/models.py).
 
 ### Interpretability
 Following the IML/XAI framework (Molnar 2019, Biecek & Burzykowski 2021):
