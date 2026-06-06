@@ -11,11 +11,15 @@ Configure the EXPERIMENT block below, then run:
 
 Configuration
 -------------
-MODEL       : 'EEGNet' or 'lightweightEEGNet'
-AUGMENT     : True  → frequency mixup on training set (lightweightEEGNet only)
-               False → no augmentation
-PERIODS     : list of periods to run, any subset of
-              ['BSL', 'SENS', 'DELAY']
+MODEL            : 'EEGNet' or 'lightweightEEGNet'
+AUGMENT          : True  → frequency mixup on training set (lightweightEEGNet only)
+                   False → no augmentation
+PERIODS          : list of periods to run, any subset of
+                   ['BSL', 'SENS', 'DELAY']
+SAVE_MODEL       : save per-fold model weights to the results JSON;
+                   required for any post-hoc interpretability analysis
+SALIENCY_MAP_TIME: run saliency map analysis after training completes;
+                   requires SAVE_MODEL = True
 
 All other hyperparameters are set in the TRAINING CONFIG block.
 """
@@ -31,15 +35,17 @@ from utils import (
     run_all_subjects,
     summarize_results,
     save_results)
+from interpretability import run_saliency_analysis
 
 
 # =========================================================
 # EXPERIMENT — edit this block to configure your run
 # =========================================================
 
-MODEL   = "lightweightEEGNet"               # 'EEGNet' | 'lightweightEEGNet'
-AUGMENT = True                              # True | False
-PERIODS = ["BSL"]                           # any subset of ['BSL', 'SENS', 'DELAY']
+MODEL               = "lightweightEEGNet"      # 'EEGNet' | 'lightweightEEGNet'
+AUGMENT             = False                    # True | False
+PERIODS             = ['BSL', 'SENS', 'DELAY'] # any subset of ['BSL', 'SENS', 'DELAY']
+SALIENCY_MAP_TIME   = True                     # run saliency maps after training
 
 
 # =========================================================
@@ -66,6 +72,8 @@ RESULTS_DIR = os.path.join(
 # REPRODUCIBILITY
 # =========================================================
 
+SAVE_MODEL = SALIENCY_MAP_TIME  # Must save models to do saliency analysis later 
+
 SEED = 42
 
 os.environ["PYTHONHASHSEED"] = str(SEED)
@@ -81,18 +89,19 @@ torch.backends.cudnn.benchmark     = False
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-print(f"\nDevice : {DEVICE}")
-print(f"Model  : {MODEL.upper()}")
-print(f"Augment: {AUGMENT}")
-print(f"Periods: {PERIODS}")
-print(f"Results: {RESULTS_DIR}\n")
+print(f"\nDevice  : {DEVICE}")
+print(f"Model   : {MODEL.upper()}")
+print(f"Augment : {AUGMENT}")
+print(f"Periods : {PERIODS}")
+print(f"Saliency: {SALIENCY_MAP_TIME}")
+print(f"Results : {RESULTS_DIR}\n")
 
 
 # =========================================================
 # MODEL AND TRAINING CONFIG
 # =========================================================
 
-if MODEL == "EEGNet": # Arreglar este bloque para que usen la misma configuración de entrenamiento
+if MODEL == "EEGNet":
 
     MODEL_CLASS  = EEGNet
     MODEL_KWARGS = {
@@ -140,7 +149,8 @@ for period in PERIODS:
         model_kwargs  = MODEL_KWARGS,
         train_cfg     = TRAIN_CFG,
         device        = DEVICE,
-        augment       = AUGMENT)
+        augment       = AUGMENT,
+        save_models   = SAVE_MODEL)
 
     all_results[period] = results
 
@@ -157,3 +167,24 @@ print("=" * 50)
 
 for period in PERIODS:
     summarize_results(all_results[period], period)
+
+
+# =========================================================
+# SALIENCY MAP ANALYSIS
+# =========================================================
+
+if SALIENCY_MAP_TIME:
+
+    if not SAVE_MODEL:
+        print("\n[WARNING] SALIENCY_MAP_TIME = True but SAVE_MODEL = False. "
+              "Re-run with SAVE_MODEL = True to enable saliency analysis.")
+
+    else:
+        run_saliency_analysis(
+            results_dir    = RESULTS_DIR,
+            period_folders = PERIOD_FOLDERS,
+            periods        = PERIODS,
+            model_class    = MODEL_CLASS,
+            model_kwargs   = MODEL_KWARGS,
+            device         = DEVICE,
+            class_names    = ['Verbal', 'Spatial', 'Visual'])

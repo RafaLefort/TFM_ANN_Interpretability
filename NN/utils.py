@@ -457,7 +457,8 @@ def run_cv(
     device,
     augment=False,
     n_splits=10,
-    seed=42):
+    seed=42,
+    save_models=False):
     """
     Stratified k-fold cross-validation for one subject.
 
@@ -494,6 +495,7 @@ def run_cv(
     conf_total       = np.zeros((n_classes, n_classes))
     all_train_losses = []
     all_val_losses   = []
+    fold_models       = []  # only populated if save_models=True
 
     batch_size = train_cfg.get("batch_size", 32)
 
@@ -554,7 +556,6 @@ def run_cv(
             **model_kwargs
         ).to(device)
 
-
         preds, labels, tr_losses, val_losses = train_model(
             model,
             train_loader,
@@ -572,6 +573,9 @@ def run_cv(
 
         print(f"  Fold accuracy: {acc:.4f}")
 
+        if save_models:
+            fold_models.append({k: v.clone() for k, v in model.state_dict().items()})
+
         del model
         gc.collect()
         torch.cuda.empty_cache()
@@ -581,7 +585,8 @@ def run_cv(
         float(np.mean(accuracies)),
         conf_total,
         all_train_losses,
-        all_val_losses)
+        all_val_losses,
+        fold_models if save_models else None)
 
 
 # =========================================================
@@ -595,7 +600,8 @@ def run_all_subjects(
     model_kwargs,
     train_cfg,
     device,
-    augment=False):
+    augment=False,
+    save_models=False):
     """
     Run cross-validation for all subject CSVs in a folder.
 
@@ -608,6 +614,7 @@ def run_all_subjects(
     train_cfg    : dict
     device       : torch.device
     augment      : bool
+    save_models  : bool
 
     Returns
     -------
@@ -636,13 +643,14 @@ def run_all_subjects(
         le = LabelEncoder()
         y  = le.fit_transform(y_raw)
 
-        acc, cm, tr, val = run_cv(
+        acc, cm, tr, val, mod = run_cv(
             X, y,
             model_class=model_class,
             model_kwargs=model_kwargs,
             train_cfg=train_cfg,
             device=device,
-            augment=augment)
+            augment=augment,
+            save_models=save_models)
 
         print(f"Subject {subj} — mean accuracy: {acc:.4f}")
         print(cm)
@@ -651,7 +659,8 @@ def run_all_subjects(
             "accuracy":     acc,
             "conf_matrix":  cm.tolist(),
             "train_losses": tr,
-            "val_losses":   val}
+            "val_losses":   val,
+            "models":         mod}
 
         del X, y
         gc.collect()
@@ -680,6 +689,29 @@ def save_results(results, results_dir, period_name):
     """Save results dict to a JSON file in results_dir."""
 
     os.makedirs(results_dir, exist_ok=True)
+
+    for subj in results:
+        results[subj]['train_losses'] = [
+            [float(x) for x in fold]
+            for fold in results[subj]['train_losses']
+        ]
+        results[subj]['val_losses'] = [
+            [float(x) for x in fold]
+            for fold in results[subj]['val_losses']
+        ]
+        results[subj]['conf_matrix'] = [
+            [int(x) for x in row]
+            for row in results[subj]['conf_matrix']
+        ]
+        # State dicts are list[dict[str, Tensor]]; serialise each
+        # tensor as a plain Python list so json.dump can handle it.
+        # None is kept as-is (SAVE_MODEL = False).
+        if results[subj]['models'] is not None:
+            results[subj]['models'] = [
+                {k: v.cpu().tolist() if hasattr(v, 'tolist') else v
+                 for k, v in sd.items()}
+                for sd in results[subj]['models']
+            ]
 
     out_path = os.path.join(
         results_dir,
