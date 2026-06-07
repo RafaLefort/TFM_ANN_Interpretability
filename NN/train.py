@@ -35,7 +35,6 @@ from utils import (
     run_all_subjects,
     summarize_results,
     save_results)
-from interpretability import run_saliency_analysis
 
 
 # =========================================================
@@ -45,7 +44,7 @@ from interpretability import run_saliency_analysis
 MODEL               = "lightweightEEGNet"      # 'EEGNet' | 'lightweightEEGNet'
 AUGMENT             = False                    # True | False
 PERIODS             = ['BSL', 'SENS', 'DELAY'] # any subset of ['BSL', 'SENS', 'DELAY']
-SALIENCY_MAP_TIME   = True                     # run saliency maps after training
+SAVE_MODEL = True                              # Must save models to do analysis later
 
 
 # =========================================================
@@ -70,9 +69,7 @@ RESULTS_DIR = os.path.join(
 
 # =========================================================
 # REPRODUCIBILITY
-# =========================================================
-
-SAVE_MODEL = SALIENCY_MAP_TIME  # Must save models to do saliency analysis later 
+# ========================================================= 
 
 SEED = 42
 
@@ -167,24 +164,3 @@ print("=" * 50)
 
 for period in PERIODS:
     summarize_results(all_results[period], period)
-
-
-# =========================================================
-# SALIENCY MAP ANALYSIS
-# =========================================================
-
-if SALIENCY_MAP_TIME:
-
-    if not SAVE_MODEL:
-        print("\n[WARNING] SALIENCY_MAP_TIME = True but SAVE_MODEL = False. "
-              "Re-run with SAVE_MODEL = True to enable saliency analysis.")
-
-    else:
-        run_saliency_analysis(
-            results_dir    = RESULTS_DIR,
-            period_folders = PERIOD_FOLDERS,
-            periods        = PERIODS,
-            model_class    = MODEL_CLASS,
-            model_kwargs   = MODEL_KWARGS,
-            device         = DEVICE,
-            class_names    = ['Verbal', 'Spatial', 'Visual'])

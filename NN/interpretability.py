@@ -1,41 +1,38 @@
 """
 interpretability.py
-===================
-Interpretability tools for EEG working memory classification models.
+=======================
+Stand-alone interpretability pipeline for EEG working memory classification.
 
-All functions are designed to work with models saved via train.py
-(SAVE_MODEL = True), which stores per-fold state dicts inside the
-results JSON produced by save_results().
-
-Functions
----------
-load_subject_models         : Reconstruct trained models from saved state dicts.
-compute_saliency_trial      : Vanilla gradient saliency for a single trial.
-compute_saliency_subject    : Aggregate saliency over all folds for one subject.
-compute_saliency_period     : Aggregate saliency over all subjects for one period.
-plot_saliency_maps          : Plot and save channel × time saliency heatmaps
-                                (one panel per class, one figure per period).
-run_saliency_analysis       : End-to-end pipeline: load results, compute maps,
-                                save arrays and figures for every requested period.
+Run this script after train.py has completed with SAVE_MODEL = True.
+It loads the saved per-fold model weights from the results JSON files
+and runs all requested interpretability analyses without re-training.
 
 Usage
 -----
-Configure the EXPERIMENT block in train.py identically, then call:
+Configure the EXPERIMENT block below (must mirror train.py exactly),
+then run:
 
-    from interpretability import run_saliency_analysis
-    run_saliency_analysis(
-        results_dir  = RESULTS_DIR,
-        period_folders = PERIOD_FOLDERS,
-        periods      = PERIODS,
-        model_class  = MODEL_CLASS,
-        model_kwargs = MODEL_KWARGS,
-        device       = DEVICE,
-        class_names  = ['Verbal', 'Spatial', 'Visual'])
+    python interpretability.py
+
+Analyses
+--------
+SALIENCY_MAP  : Vanilla gradient saliency, aggregated across all subjects
+                and folds for each period.  Produces a channel × time
+                heatmap (n_classes panels) per period.
+                Implemented in interpretability.py → run_saliency_analysis().
+
+GRADCAM       : Gradient-weighted Class Activation Mapping focused on
+                channel relevance.  Hooks the spatial depthwise convolution
+                in both architectures — the layer that explicitly learns to
+                weight EEG channels — and computes a (n_channels,) importance
+                score per class per period.
+                Implemented below → run_gradcam_analysis().
 """
 
 import os
 import gc
 import json
+import random
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -46,102 +43,218 @@ import torch
 from sklearn.preprocessing import LabelEncoder
 from sklearn.model_selection import StratifiedKFold
 
+from models import EEGNet, lightweightEEGNet
 from utils import load_subject_csv
+from interpretability_utils import (
+    load_subject_models,
+    run_saliency_analysis)
 
 
 # =========================================================
-# LOAD SUBJECT MODELS
+# EXPERIMENT — mirror train.py exactly
 # =========================================================
 
-def load_subject_models(
-    state_dicts,
-    model_class,
-    model_kwargs,
-    n_samples,
-    device):
+MODEL   = "lightweightEEGNet"       # 'EEGNet' | 'lightweightEEGNet'
+AUGMENT = False                     # must match train.py
+PERIODS = ['BSL', 'SENS', 'DELAY']  # any subset of ['BSL', 'SENS', 'DELAY']
+
+CLASS_NAMES   = ['Verbal', 'Spatial', 'Visual']
+CHANNEL_NAMES = None  # list[str] of length 64, or None to use indices
+
+
+# =========================================================
+# ANALYSES TO RUN
+# =========================================================
+
+SALIENCY_MAP = True   # vanilla gradient saliency (channel × time heatmap)
+GRADCAM      = True   # GradCAM channel relevance bar charts
+
+
+# =========================================================
+# PATHS — mirror train.py exactly
+# =========================================================
+
+BASE_PATH = "NN/results/"
+
+PERIOD_FOLDERS = {
+    "BSL":   os.path.join("", "BSL_subjects"),
+    "SENS":  os.path.join("", "SENS_subjects"),
+    "DELAY": os.path.join("", "DELAY_subjects"),
+}
+
+_aug_tag    = "_data_augmentation" if AUGMENT else ""
+_model_tag  = "lightweightEEGNet" if MODEL == "lightweightEEGNet" else "EEGNet"
+RESULTS_DIR = os.path.join(BASE_PATH, f"{_model_tag}{_aug_tag}")
+
+
+# =========================================================
+# REPRODUCIBILITY
+# =========================================================
+
+SEED = 42
+
+os.environ["PYTHONHASHSEED"] = str(SEED)
+random.seed(SEED)
+np.random.seed(SEED)
+torch.manual_seed(SEED)
+torch.cuda.manual_seed_all(SEED)
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark     = False
+
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+print(f"\nDevice  : {DEVICE}")
+print(f"Model   : {MODEL.upper()}")
+print(f"Periods : {PERIODS}")
+print(f"Results : {RESULTS_DIR}")
+print(f"Saliency: {SALIENCY_MAP}")
+print(f"GradCAM : {GRADCAM}\n")
+
+
+# =========================================================
+# MODEL CONFIG — mirror train.py exactly
+# =========================================================
+
+if MODEL == "EEGNet":
+
+    MODEL_CLASS  = EEGNet
+    MODEL_KWARGS = {
+        "n_channels":   64,
+        "n_classes":    3,
+        "dropout_rate": 0.5,
+    }
+
+elif MODEL == "lightweightEEGNet":
+
+    MODEL_CLASS  = lightweightEEGNet
+    MODEL_KWARGS = {
+        "n_channels": 64,
+        "n_classes":  3,
+    }
+
+else:
+    raise ValueError(f"Unknown model '{MODEL}'. "
+                     f"Choose 'EEGNet' or 'lightweightEEGNet'.")
+
+
+# =========================================================
+# GRADCAM — TARGET LAYER RESOLUTION
+# =========================================================
+#
+# Channel relevance requires hooking the spatial depthwise convolution,
+# which is the layer that explicitly learns to weight EEG channels
+# (kernel shape: (n_channels, 1)).  Its *input* feature map has shape
+# (B, F_in, n_channels, T), so gradients w.r.t. that tensor carry
+# per-channel importance information before the channel axis is collapsed.
+#
+# Layer locations per architecture:
+#   EEGNet            → model.block1[2]   (nn.Conv2d, groups=F1)
+#   lightweightEEGNet → model.spatial_conv (nn.Conv2d, groups=6)
+#
+# GradCAM formula applied here:
+#   For each trial and target class c:
+#     1. Forward pass → logit[c]
+#     2. Backward pass → grad of logit[c] w.r.t. spatial conv INPUT
+#        shape: (1, F_in, n_channels, T)
+#     3. Global-average-pool over filter (dim 1) and time (dim 3)
+#        → weight vector of shape (n_channels,)
+#     4. ReLU — keep only positively contributing channels
+#   Aggregate over correctly-classified trials, then across folds
+#   and subjects with trial-count weighting.
+#
+# =========================================================
+
+def _get_spatial_conv(model):
     """
-    Reconstruct trained models from a list of saved state dicts.
+    Return the spatial depthwise Conv2d for the given model instance.
 
-    Each entry in state_dicts corresponds to one CV fold.  The function
-    instantiates a fresh model, loads the weights, and sets it to eval
-    mode with gradients enabled for saliency computation.
+    This is the layer whose input gradients encode channel relevance.
 
     Parameters
     ----------
-    state_dicts  : list[dict] — per-fold state dicts (from results JSON)
-    model_class  : class      — EEGNet or lightweightEEGNet
-    model_kwargs : dict       — passed to model_class(...)
-    n_samples    : int        — temporal length of the EEG trials
-    device       : torch.device
+    model : nn.Module — EEGNet or lightweightEEGNet instance
 
     Returns
     -------
-    models : list[nn.Module]  — one loaded model per fold, on device
+    layer : nn.Conv2d
     """
 
-    models = []
+    if isinstance(model, EEGNet):
+        # block1 is nn.Sequential; index 2 is the depthwise spatial conv
+        return model.block1[2]
 
-    for sd in state_dicts:
+    elif isinstance(model, lightweightEEGNet):
+        return model.spatial_conv
 
-        model = model_class(
-            n_samples=n_samples,
-            **model_kwargs
-        ).to(device)
-
-        # State dicts saved via save_results() store tensors as plain
-        # Python lists (JSON-serialized). Re-convert them here.
-        tensor_sd = {
-            k: torch.tensor(np.array(v, dtype=np.float32)).to(device)
-            for k, v in sd.items()}
-
-        model.load_state_dict(tensor_sd)
-        model.eval()
-
-        models.append(model)
-
-    return models
+    else:
+        raise TypeError(
+            f"Unsupported model type '{type(model).__name__}'. "
+            f"Add its spatial conv location to _get_spatial_conv().")
 
 
 # =========================================================
-# COMPUTE SALIENCY — SINGLE TRIAL
+# GRADCAM — SINGLE TRIAL
 # =========================================================
 
-def compute_saliency_trial(model, x, target_class, device):
+def compute_gradcam_trial(model, x, target_class, device):
     """
-    Vanilla gradient saliency for a single EEG trial.
+    GradCAM channel relevance for a single EEG trial.
 
-    Computes ∂logit[target_class] / ∂x, then takes the absolute value
-    to obtain a non-negative importance map of shape (n_channels, n_samples).
+    Hooks the input gradient of the spatial depthwise convolution,
+    global-average-pools over filter and time dimensions, and applies
+    ReLU to retain only positively contributing channels.
 
     Parameters
     ----------
     model        : nn.Module — trained model in eval mode
     x            : np.ndarray, shape (n_channels, n_samples), float32
-    target_class : int — class index for which to differentiate
+    target_class : int
     device       : torch.device
 
     Returns
     -------
-    saliency : np.ndarray, shape (n_channels, n_samples), float32
+    cam : np.ndarray, shape (n_channels,), float32 — channel importance ≥ 0
     """
 
-    xb = torch.tensor(x[np.newaxis], dtype=torch.float32,
-                      requires_grad=True, device=device)
+    spatial_conv = _get_spatial_conv(model)
 
-    out  = model(xb)
+    # Storage for the hook
+    grad_input = {}
+
+    def _hook(module, grad_in, grad_out):
+        # grad_in[0]: gradient w.r.t. the layer's input tensor
+        # shape: (B, F_in, n_channels, T)
+        grad_input["value"] = grad_in[0]
+
+    handle = spatial_conv.register_full_backward_hook(_hook)
+
+    xb = torch.tensor(
+        x[np.newaxis], dtype=torch.float32,
+        requires_grad=True, device=device)
+
+    out   = model(xb)
     score = out[0, target_class]
     score.backward()
 
-    saliency = xb.grad.detach().cpu().numpy()[0]
+    handle.remove()
 
-    return np.abs(saliency).astype(np.float32)
+    # grad shape: (1, F_in, n_channels, T)
+    grad = grad_input["value"].detach().cpu().numpy()[0]
+
+    # Pool over filter (axis 0) and time (axis 2) → (n_channels,)
+    weights = grad.mean(axis=(0, 2))
+
+    # ReLU: negative weights indicate suppression, not relevance
+    cam = np.maximum(weights, 0).astype(np.float32)
+
+    return cam
 
 
 # =========================================================
-# COMPUTE SALIENCY — ONE SUBJECT, ALL FOLDS
+# GRADCAM — ONE SUBJECT, ALL FOLDS
 # =========================================================
 
-def compute_saliency_subject(
+def compute_gradcam_subject(
     models,
     X,
     y,
@@ -149,41 +262,34 @@ def compute_saliency_subject(
     n_splits=10,
     seed=42):
     """
-    Aggregate saliency over all CV folds for one subject.
+    Aggregate GradCAM channel relevance over all CV folds for one subject.
 
-    The fold splits are re-created with the same StratifiedKFold
-    parameters as run_cv() so that each fold's model is evaluated
-    on its own held-out validation set.  Normalization statistics
-    are recomputed from training data only, matching run_cv() exactly.
-
-    Only correctly-classified trials contribute to the aggregation
-    to ensure the maps reflect the model's actual discriminative signal.
+    Fold splits and normalization are reproduced identically to run_cv()
+    to ensure each fold model is evaluated on its own held-out data.
+    Only correctly-classified trials contribute to the accumulation.
 
     Parameters
     ----------
-    models    : list[nn.Module] — one loaded model per fold
+    models    : list[nn.Module]
     X         : np.ndarray, shape (n_trials, n_channels, n_samples)
-    y         : np.ndarray, shape (n_trials,), integer labels
+    y         : np.ndarray, shape (n_trials,)
     n_classes : int
-    n_splits  : int — must match the value used in run_cv() (default: 10)
-    seed      : int — must match the value used in run_cv() (default: 42)
+    n_splits  : int (default: 10)
+    seed      : int (default: 42)
 
     Returns
     -------
-    saliency_per_class : np.ndarray, shape (n_classes, n_channels, n_samples)
-                         Mean absolute gradient over correctly classified trials,
-                         averaged across folds.  NaN where no correct trials exist.
-    counts_per_class   : np.ndarray, shape (n_classes,)
-                         Total number of correctly classified trials per class.
+    cam_per_class : np.ndarray, shape (n_classes, n_channels), float32
+                    Mean channel importance per class; NaN where no correct
+                    trials exist.
+    counts        : np.ndarray, shape (n_classes,), int64
+                    Number of correctly classified trials per class.
     """
 
-    device = next(models[0].parameters()).device
-
+    device     = next(models[0].parameters()).device
     n_channels = X.shape[1]
-    n_samples  = X.shape[2]
 
-    # Accumulators: sum of saliency maps and trial counts, per class
-    sal_sum = np.zeros((n_classes, n_channels, n_samples), dtype=np.float64)
+    cam_sum = np.zeros((n_classes, n_channels), dtype=np.float64)
     counts  = np.zeros(n_classes, dtype=np.int64)
 
     kf = StratifiedKFold(
@@ -199,7 +305,6 @@ def compute_saliency_subject(
         X_val   = X[val_idx]
         y_val   = y[val_idx]
 
-
         # -------------------------------------------------
         # NORMALIZATION — identical to run_cv()
         # -------------------------------------------------
@@ -209,45 +314,39 @@ def compute_saliency_subject(
 
         X_val_norm = (X_val - mean) / std
 
-
         # -------------------------------------------------
-        # SALIENCY ACCUMULATION — correctly classified only
+        # GRADCAM ACCUMULATION — correctly classified only
         # -------------------------------------------------
 
-        for i, (x, true_label) in enumerate(zip(X_val_norm, y_val)):
+        for x, true_label in zip(X_val_norm, y_val):
 
             with torch.no_grad():
-                xb  = torch.tensor(x[np.newaxis], dtype=torch.float32,
-                                   device=device)
+                xb   = torch.tensor(x[np.newaxis], dtype=torch.float32,
+                                    device=device)
                 out  = model(xb)
                 pred = int(torch.argmax(out, dim=1).cpu())
 
             if pred != true_label:
                 continue
 
-            sal = compute_saliency_trial(model, x, true_label, device)
+            cam = compute_gradcam_trial(model, x, true_label, device)
 
-            sal_sum[true_label] += sal
+            cam_sum[true_label] += cam
             counts[true_label]  += 1
 
-
-    # -------------------------------------------------
-    # AVERAGE — protect against empty classes
-    # -------------------------------------------------
-
-    saliency_per_class = np.where(
-        counts[:, np.newaxis, np.newaxis] > 0,
-        sal_sum / np.maximum(counts[:, np.newaxis, np.newaxis], 1),
+    cam_per_class = np.where(
+        counts[:, np.newaxis] > 0,
+        cam_sum / np.maximum(counts[:, np.newaxis], 1),
         np.nan)
 
-    return saliency_per_class.astype(np.float32), counts
+    return cam_per_class.astype(np.float32), counts
 
 
 # =========================================================
-# COMPUTE SALIENCY — ALL SUBJECTS FOR ONE PERIOD
+# GRADCAM — ALL SUBJECTS FOR ONE PERIOD
 # =========================================================
 
-def compute_saliency_period(
+def compute_gradcam_period(
     results,
     folder,
     model_class,
@@ -257,17 +356,12 @@ def compute_saliency_period(
     n_splits=10,
     seed=42):
     """
-    Aggregate per-class saliency maps across all subjects for one period.
-
-    For each subject the per-fold models are loaded, saliency is computed
-    on the held-out validation splits, and the results are averaged
-    weighted by the number of correctly classified trials.
+    Aggregate GradCAM channel relevance across all subjects for one period.
 
     Parameters
     ----------
-    results      : dict — subject results from load_period_results()
-                          keys: subject IDs, values must contain 'models'
-    folder       : str  — path to the subject CSV folder
+    results      : dict — subject results loaded from JSON
+    folder       : str  — path to subject CSV folder
     model_class  : class
     model_kwargs : dict
     device       : torch.device
@@ -277,12 +371,11 @@ def compute_saliency_period(
 
     Returns
     -------
-    period_saliency : np.ndarray, shape (n_classes, n_channels, n_samples)
-                      Weighted mean saliency across all subjects and folds.
+    period_cam : np.ndarray, shape (n_classes, n_channels), float32
+                 Trial-count-weighted mean channel importance across all subjects.
     """
 
-    # Weighted-sum accumulators across subjects
-    sal_sum_global = None
+    cam_sum_global = None
     counts_global  = np.zeros(n_classes, dtype=np.float64)
 
     for file in sorted(os.listdir(folder)):
@@ -303,7 +396,7 @@ def compute_saliency_period(
                   f"(re-run train.py with SAVE_MODEL = True)")
             continue
 
-        print(f"  Computing saliency — subject {subj}")
+        print(f"  Computing GradCAM — subject {subj}")
 
         X, y_raw = load_subject_csv(os.path.join(folder, file))
 
@@ -317,7 +410,7 @@ def compute_saliency_period(
             n_samples    = X.shape[-1],
             device       = device)
 
-        sal, counts = compute_saliency_subject(
+        cam, counts = compute_gradcam_subject(
             models    = models,
             X         = X,
             y         = y,
@@ -325,207 +418,224 @@ def compute_saliency_period(
             n_splits  = n_splits,
             seed      = seed)
 
-        # -------------------------------------------------
-        # WEIGHTED ACCUMULATION
-        # sal is (n_classes, C, T); weight each class map by
-        # how many correctly classified trials it came from.
-        # -------------------------------------------------
-
-        if sal_sum_global is None:
-            sal_sum_global = np.zeros_like(sal, dtype=np.float64)
+        if cam_sum_global is None:
+            cam_sum_global = np.zeros_like(cam, dtype=np.float64)
 
         for c in range(n_classes):
-            if not np.isnan(sal[c]).all():
-                sal_sum_global[c] += sal[c] * counts[c]
+            if not np.isnan(cam[c]).all():
+                cam_sum_global[c] += cam[c] * counts[c]
                 counts_global[c]  += counts[c]
 
         del models, X, y
         gc.collect()
         torch.cuda.empty_cache()
 
-    if sal_sum_global is None:
-        raise RuntimeError("No subjects were processed. "
-                           "Check folder and results dict.")
+    if cam_sum_global is None:
+        raise RuntimeError(
+            "No subjects were processed. Check folder and results dict.")
 
-    period_saliency = np.where(
-        counts_global[:, np.newaxis, np.newaxis] > 0,
-        sal_sum_global / np.maximum(counts_global[:, np.newaxis, np.newaxis], 1),
+    period_cam = np.where(
+        counts_global[:, np.newaxis] > 0,
+        cam_sum_global / np.maximum(counts_global[:, np.newaxis], 1),
         np.nan)
 
-    return period_saliency.astype(np.float32)
+    return period_cam.astype(np.float32)
 
 
 # =========================================================
-# PLOT SALIENCY MAPS
+# PLOT GRADCAM — CHANNEL RELEVANCE BAR CHARTS
 # =========================================================
 
-def plot_saliency_maps(
-    saliency,
+def plot_gradcam_channel_relevance(
+    cam,
     period_name,
     results_dir,
     class_names=None,
-    channel_names=None):
+    channel_names=None,
+    top_k=20):
     """
-    Plot and save channel × time saliency heatmaps for one period.
+    Plot and save GradCAM channel relevance bar charts for one period.
 
-    One subplot per class is arranged horizontally.  The colour scale
-    is normalised per class so within-class spatial and temporal patterns
-    are visually comparable across plots.
+    Layout: one row per class, showing the top_k most relevant channels
+    as a horizontal bar chart.  A second figure shows all channels as a
+    heatmap (classes × channels) for cross-class comparison.
 
     Parameters
     ----------
-    saliency      : np.ndarray, shape (n_classes, n_channels, n_samples)
-    period_name   : str  — used in the figure title and filename
-    results_dir   : str  — output directory (created if absent)
-    class_names   : list[str] | None — default: ['Class 0', 'Class 1', ...]
-    channel_names : list[str] | None — y-axis tick labels; omitted if None
-                    (64 channel names would be unreadable at default fig size)
+    cam           : np.ndarray, shape (n_classes, n_channels)
+    period_name   : str
+    results_dir   : str
+    class_names   : list[str] | None
+    channel_names : list[str] | None — if None, channel indices are used
+    top_k         : int — number of top channels shown in bar charts (default: 20)
 
     Saves
     -----
-    <results_dir>/saliency_<period_name.lower()>.png
+    <results_dir>/gradcam_bars_<period>.png   — top-k bar charts per class
+    <results_dir>/gradcam_heatmap_<period>.png — full heatmap (classes × channels)
     """
 
-    n_classes  = saliency.shape[0]
-    n_channels = saliency.shape[1]
-    n_samples  = saliency.shape[2]
+    n_classes  = cam.shape[0]
+    n_channels = cam.shape[1]
+    period_lo  = period_name.lower()
 
     if class_names is None:
         class_names = [f"Class {c}" for c in range(n_classes)]
 
-    fig = plt.figure(figsize=(6 * n_classes, 5))
-    fig.suptitle(
-        f"Saliency Maps — {period_name}",
-        fontsize=14, fontweight="bold", y=1.02)
-
-    gs = gridspec.GridSpec(
-        1, n_classes + 1,
-        width_ratios=[1] * n_classes + [0.05],
-        wspace=0.35)
-
-    # Shared colour range: 0 → global max across all classes
-    vmax = np.nanmax(saliency)
-    vmin = 0.0
-
-    axes = []
-
-    for c in range(n_classes):
-
-        ax = fig.add_subplot(gs[0, c])
-        axes.append(ax)
-
-        sal_c = saliency[c]
-
-        im = ax.imshow(
-            sal_c,
-            aspect="auto",
-            origin="upper",
-            cmap="hot",
-            vmin=vmin,
-            vmax=vmax,
-            interpolation="nearest")
-
-        ax.set_title(class_names[c], fontsize=11)
-        ax.set_xlabel("Time sample", fontsize=9)
-
-        if c == 0:
-            ax.set_ylabel("Channel", fontsize=9)
-
-            if channel_names is not None:
-                ax.set_yticks(range(n_channels))
-                ax.set_yticklabels(channel_names, fontsize=6)
-            else:
-                ax.set_yticks([0, n_channels // 2, n_channels - 1])
-                ax.set_yticklabels(
-                    [0, n_channels // 2, n_channels - 1],
-                    fontsize=8)
-        else:
-            ax.set_yticks([])
-
-        # X-axis: a few evenly spaced ticks
-        tick_positions = np.linspace(0, n_samples - 1, 5, dtype=int)
-        ax.set_xticks(tick_positions)
-        ax.set_xticklabels(tick_positions, fontsize=8)
-
-    # Shared colourbar
-    cax = fig.add_subplot(gs[0, n_classes])
-    plt.colorbar(im, cax=cax, label="|gradient|")
+    ch_labels = (
+        channel_names
+        if channel_names is not None
+        else [str(i) for i in range(n_channels)])
 
     os.makedirs(results_dir, exist_ok=True)
 
-    out_path = os.path.join(
-        results_dir,
-        f"saliency_{period_name.lower()}.png")
 
-    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    # -------------------------------------------------
+    # FIGURE 1 — Top-k horizontal bar charts, one per class
+    # -------------------------------------------------
+
+    fig, axes = plt.subplots(
+        n_classes, 1,
+        figsize=(10, 3.5 * n_classes),
+        constrained_layout=True)
+
+    if n_classes == 1:
+        axes = [axes]
+
+    fig.suptitle(
+        f"GradCAM Channel Relevance — {period_name}\n"
+        f"(top {top_k} channels, spatial conv input gradients)",
+        fontsize=13, fontweight="bold")
+
+    # Normalise across all classes so bars are directly comparable
+    global_max = np.nanmax(cam)
+
+    for c, ax in enumerate(axes):
+
+        scores = cam[c].copy()
+        scores[np.isnan(scores)] = 0.0
+
+        # Sort descending, take top_k
+        order   = np.argsort(scores)[::-1][:top_k]
+        top_ch  = [ch_labels[i] for i in order]
+        top_sc  = scores[order] / (global_max + 1e-9)   # normalised 0–1
+
+        colours = plt.cm.YlOrRd(top_sc)
+
+        bars = ax.barh(
+            range(top_k),
+            top_sc,
+            color=colours,
+            edgecolor="none",
+            height=0.7)
+
+        ax.set_yticks(range(top_k))
+        ax.set_yticklabels(top_ch, fontsize=8)
+        ax.invert_yaxis()                      # highest relevance at top
+        ax.set_xlim(0, 1.05)
+        ax.set_xlabel("Normalised relevance", fontsize=9)
+        ax.set_title(class_names[c], fontsize=11, fontweight="bold")
+        ax.spines[["top", "right"]].set_visible(False)
+
+        # Annotate raw scores on bars
+        for bar, sc in zip(bars, top_sc):
+            ax.text(
+                bar.get_width() + 0.01,
+                bar.get_y() + bar.get_height() / 2,
+                f"{sc:.3f}",
+                va="center", ha="left", fontsize=7)
+
+    bars_path = os.path.join(results_dir, f"gradcam_bars_{period_lo}.png")
+    fig.savefig(bars_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
 
-    print(f"Saliency figure saved → {out_path}")
+    print(f"GradCAM bar chart saved → {bars_path}")
+
+
+    # -------------------------------------------------
+    # FIGURE 2 — Full heatmap: classes × channels
+    # Useful for spotting which channels are class-specific
+    # vs. universally relevant.
+    # -------------------------------------------------
+
+    fig2, ax2 = plt.subplots(
+        figsize=(max(12, n_channels * 0.18), 3.5),
+        constrained_layout=True)
+
+    fig2.suptitle(
+        f"GradCAM Channel Relevance Heatmap — {period_name}",
+        fontsize=13, fontweight="bold")
+
+    cam_norm = cam / (global_max + 1e-9)
+
+    im = ax2.imshow(
+        cam_norm,
+        aspect="auto",
+        cmap="YlOrRd",
+        vmin=0, vmax=1,
+        interpolation="nearest")
+
+    ax2.set_yticks(range(n_classes))
+    ax2.set_yticklabels(class_names, fontsize=10)
+
+    tick_step = max(1, n_channels // 32)
+    tick_pos  = list(range(0, n_channels, tick_step))
+
+    ax2.set_xticks(tick_pos)
+    ax2.set_xticklabels(
+        [ch_labels[i] for i in tick_pos],
+        fontsize=7,
+        rotation=45,
+        ha="right")
+
+    ax2.set_xlabel("Channel", fontsize=10)
+
+    cbar = plt.colorbar(im, ax=ax2, fraction=0.015, pad=0.01)
+    cbar.set_label("Normalised relevance", fontsize=9)
+
+    heatmap_path = os.path.join(
+        results_dir, f"gradcam_heatmap_{period_lo}.png")
+
+    fig2.savefig(heatmap_path, dpi=150, bbox_inches="tight")
+    plt.close(fig2)
+
+    print(f"GradCAM heatmap     saved → {heatmap_path}")
 
 
 # =========================================================
-# SAVE SALIENCY ARRAYS
+# SAVE GRADCAM ARRAYS
 # =========================================================
 
-def save_saliency(saliency, results_dir, period_name):
+def save_gradcam(cam, results_dir, period_name):
     """
-    Save a saliency array to disk as a compressed NumPy archive.
+    Save a GradCAM array to disk as a compressed NumPy archive.
 
     Parameters
     ----------
-    saliency     : np.ndarray, shape (n_classes, n_channels, n_samples)
+    cam          : np.ndarray, shape (n_classes, n_channels)
     results_dir  : str
     period_name  : str
 
     Saves
     -----
-    <results_dir>/saliency_<period_name.lower()>.npz
+    <results_dir>/gradcam_<period_name.lower()>.npz
     """
 
     os.makedirs(results_dir, exist_ok=True)
 
     out_path = os.path.join(
-        results_dir,
-        f"saliency_{period_name.lower()}.npz")
+        results_dir, f"gradcam_{period_name.lower()}.npz")
 
-    np.savez_compressed(out_path, saliency=saliency)
+    np.savez_compressed(out_path, cam=cam)
 
-    print(f"Saliency array  saved → {out_path}")
-
-
-# =========================================================
-# LOAD PERIOD RESULTS
-# =========================================================
-
-def load_period_results(results_dir, period_name):
-    """
-    Load the JSON results file produced by save_results() for one period.
-
-    Parameters
-    ----------
-    results_dir : str
-    period_name : str — e.g. 'BSL', 'SENS', 'DELAY'
-
-    Returns
-    -------
-    results : dict — subject ID → result dict (including 'models' key)
-    """
-
-    path = os.path.join(
-        results_dir,
-        f"results_{period_name.lower()}.json")
-
-    with open(path, "r") as f:
-        results = json.load(f)
-
-    return results
+    print(f"GradCAM array  saved → {out_path}")
 
 
 # =========================================================
-# RUN SALIENCY ANALYSIS  — end-to-end pipeline
+# RUN GRADCAM ANALYSIS — end-to-end pipeline
 # =========================================================
 
-def run_saliency_analysis(
+def run_gradcam_analysis(
     results_dir,
     period_folders,
     periods,
@@ -536,48 +646,45 @@ def run_saliency_analysis(
     channel_names=None,
     n_classes=3,
     n_splits=10,
-    seed=42):
+    seed=42,
+    top_k=20):
     """
-    End-to-end saliency pipeline: load results, compute maps, save outputs.
-
-    For each period in `periods`:
-      1. Load the results JSON from results_dir.
-      2. Aggregate saliency over all subjects and folds.
-      3. Save the saliency array as a compressed .npz file.
-      4. Save a channel × time heatmap figure as a .png file.
-
-    Both outputs land in results_dir alongside the existing JSON files.
+    End-to-end GradCAM pipeline: load results, compute channel relevance,
+    save arrays and figures for every requested period.
 
     Parameters
     ----------
-    results_dir    : str  — directory produced by train.py (RESULTS_DIR)
-    period_folders : dict — maps period name → CSV folder path
-                            (same PERIOD_FOLDERS dict used in train.py)
-    periods        : list[str] — subset of ['BSL', 'SENS', 'DELAY']
-    model_class    : class — EEGNet or lightweightEEGNet
-    model_kwargs   : dict  — passed to model_class(...)
+    results_dir    : str
+    period_folders : dict  — maps period name → CSV folder path
+    periods        : list[str]
+    model_class    : class
+    model_kwargs   : dict
     device         : torch.device
-    class_names    : list[str] | None — stimulus labels for plot titles
-    channel_names  : list[str] | None — EEG channel labels for y-axis
+    class_names    : list[str] | None
+    channel_names  : list[str] | None
     n_classes      : int  (default: 3)
     n_splits       : int  (default: 10)
     seed           : int  (default: 42)
+    top_k          : int  — channels shown in bar charts (default: 20)
 
     Returns
     -------
-    all_saliency : dict — maps period name → np.ndarray
-                          shape (n_classes, n_channels, n_samples)
+    all_cam : dict — maps period name → np.ndarray (n_classes, n_channels)
     """
 
-    all_saliency = {}
+    all_cam = {}
 
     for period in periods:
 
-        print(f"\n{'='*20} SALIENCY — {period} {'='*20}")
+        print(f"\n{'='*20} GRADCAM — {period} {'='*20}")
 
-        results = load_period_results(results_dir, period)
+        results_path = os.path.join(
+            results_dir, f"results_{period.lower()}.json")
 
-        saliency = compute_saliency_period(
+        with open(results_path, "r") as f:
+            results = json.load(f)
+
+        cam = compute_gradcam_period(
             results      = results,
             folder       = period_folders[period],
             model_class  = model_class,
@@ -587,17 +694,58 @@ def run_saliency_analysis(
             n_splits     = n_splits,
             seed         = seed)
 
-        save_saliency(saliency, results_dir, period)
+        save_gradcam(cam, results_dir, period)
 
-        plot_saliency_maps(
-            saliency      = saliency,
+        plot_gradcam_channel_relevance(
+            cam           = cam,
             period_name   = period,
             results_dir   = results_dir,
             class_names   = class_names,
-            channel_names = channel_names)
+            channel_names = channel_names,
+            top_k         = top_k)
 
-        all_saliency[period] = saliency
+        all_cam[period] = cam
 
-    print("\nSaliency analysis complete.")
+    print("\nGradCAM analysis complete.")
 
-    return all_saliency
+    return all_cam
+
+
+# =========================================================
+# MAIN
+# =========================================================
+
+if __name__ == "__main__":
+
+    # -------------------------------------------------
+    # SALIENCY MAP
+    # -------------------------------------------------
+
+    if SALIENCY_MAP:
+
+        run_saliency_analysis(
+            results_dir    = RESULTS_DIR,
+            period_folders = PERIOD_FOLDERS,
+            periods        = PERIODS,
+            model_class    = MODEL_CLASS,
+            model_kwargs   = MODEL_KWARGS,
+            device         = DEVICE,
+            class_names    = CLASS_NAMES,
+            channel_names  = CHANNEL_NAMES)
+
+    # -------------------------------------------------
+    # GRADCAM
+    # -------------------------------------------------
+
+    if GRADCAM:
+
+        run_gradcam_analysis(
+            results_dir    = RESULTS_DIR,
+            period_folders = PERIOD_FOLDERS,
+            periods        = PERIODS,
+            model_class    = MODEL_CLASS,
+            model_kwargs   = MODEL_KWARGS,
+            device         = DEVICE,
+            class_names    = CLASS_NAMES,
+            channel_names  = CHANNEL_NAMES,
+            top_k          = 20)
