@@ -90,7 +90,6 @@ print(f"\nDevice  : {DEVICE}")
 print(f"Model   : {MODEL.upper()}")
 print(f"Augment : {AUGMENT}")
 print(f"Periods : {PERIODS}")
-print(f"Saliency: {SALIENCY_MAP_TIME}")
 print(f"Results : {RESULTS_DIR}\n")
 
 

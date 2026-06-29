@@ -261,3 +261,28 @@ ggplot(df_violin, aes(x = dataset, y = accuracy)) +
   theme(axis.title = element_text(size = 13),
         axis.text = element_text(size = 12),
         legend.position = "none")
+
+export_lasso_weights <- function(model_list, df_proc, period_name,
+                                 out_dir = "GLM/lasso_weights") {
+  dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+  subjects <- unique(df_proc$subjectID)
+  rows <- list()
+  for (i in seq_along(subjects)) {
+    model  <- model_list[[i]]
+    coeffs <- coef(model, s = "lambda.min")   # named list: one sparse matrix per class
+    for (cls in names(coeffs)) {
+      beta <- as.numeric(coeffs[[cls]])[-1]   # drop intercept (row 1)
+      rows[[length(rows) + 1]] <- c(
+        subjectID = subjects[i], class = cls,
+        setNames(beta, paste0("chn", seq_along(beta))))
+    }
+  }
+  df_out <- do.call(rbind, lapply(rows, function(r) as.data.frame(t(r), stringsAsFactors = FALSE)))
+  write.csv(df_out,
+            file.path(out_dir, paste0("lasso_weights_", tolower(period_name), ".csv")),
+            row.names = FALSE)
+}
+
+export_lasso_weights(models_BSL,   BSL_proc,   "BSL")
+export_lasso_weights(models_SENS,  SENS_proc,  "SENS")
+export_lasso_weights(models_DELAY, DELAY_proc, "DELAY")
