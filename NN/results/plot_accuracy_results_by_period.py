@@ -13,7 +13,7 @@ import pandas as pd
 
 BASE_PATH = "NN/results/"
 
-MODEL = "lightweightEEGNet"              # 'EEGNet' | 'lightweightEEGNet'
+MODEL = "EEGNet"              # 'EEGNet' | 'lightweightEEGNet'
 AUGMENT = True                           # True | False
 
 # Results directory is named automatically from the experiment config
@@ -241,7 +241,7 @@ plt.legend(
 # =========================
 
 plt.ylabel("Classification accuracy (%)")
-plt.title("Classification of time-averaged patterns")
+plt.title("Classification of EEG data by period")
 plt.ylim(20, 100)
 
 sns.despine()

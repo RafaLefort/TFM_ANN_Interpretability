@@ -241,21 +241,21 @@ ggplot(df_violin, aes(x = dataset, y = accuracy)) +
   stat_summary(fun = median, geom = "point", size = 4, color = "white",
                show.legend = FALSE) +
   
-
+  
   stat_summary(fun = mean, geom = "text",
-             aes(label = sprintf("%.1f %%", ..y..)),
-             vjust = -0.8, hjust = -1.5, size = 6, color = "black") +
-
-
+               aes(label = sprintf("%.1f %%", ..y..)),
+               vjust = -0.8, hjust = -1.5, size = 6, color = "black") +
+  
+  
   geom_hline(yintercept = 1/3*100, linetype = "dashed", color = "black",
-           show.legend = FALSE) +
+             show.legend = FALSE) +
   
   scale_fill_manual(
     values = c("BSL" = "gray60", "SENS" = "forestgreen", "DELAY" = "purple")) +
   
   theme_minimal(base_size = 15) +
-  labs(title = "Accuracy per subjecte i període",
-       x = "Període experimental",
+  labs(title = "Accuracy by subject and period",
+       x = "Experimental period",
        y = "Accuracy (%)") +
   
   theme(axis.title = element_text(size = 13),
@@ -286,3 +286,21 @@ export_lasso_weights <- function(model_list, df_proc, period_name,
 export_lasso_weights(models_BSL,   BSL_proc,   "BSL")
 export_lasso_weights(models_SENS,  SENS_proc,  "SENS")
 export_lasso_weights(models_DELAY, DELAY_proc, "DELAY")
+
+# ----- 9. EXPORT PER-SUBJECT ACCURACIES (FOR PYTHON T-TEST SCRIPT) -----
+
+# Writes one CSV per period with columns subjectID, accuracy.
+# Accuracy is rescaled from 0-100 back to 0-1 to match the scale used in
+# the NN results_*.json files, so t-test.py can compare them directly.
+export_accuracy_csv <- function(acc_df, period_name, out_dir = "GLM/results") {
+  dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+  acc_out <- acc_df
+  acc_out$accuracy <- acc_out$accuracy / 100
+  write.csv(acc_out[, c("subjectID", "accuracy")],
+            file.path(out_dir, paste0("results_", tolower(period_name), ".csv")),
+            row.names = FALSE)
+}
+
+export_accuracy_csv(acc_BSL,   "BSL")
+export_accuracy_csv(acc_SENS,  "SENS")
+export_accuracy_csv(acc_DELAY, "DELAY")
